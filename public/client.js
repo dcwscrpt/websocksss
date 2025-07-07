@@ -10,11 +10,11 @@ class WebSocketChat {
         this.localStream = null;
         this.remoteStream = null;
         
-        // Настройка сервера - замените на IP вашего сервера
-        this.serverConfig = {
+        // Используем конфигурацию из config.js
+        this.serverConfig = window.serverConfig || {
             host: 'your-server-ip', // Замените на IP вашего сервера
             port: 3000,
-            protocol: 'ws' // или 'wss' для HTTPS
+            protocol: 'ws'
         };
         
         this.initializeElements();
