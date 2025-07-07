@@ -9,20 +9,20 @@ const config = {
     serverPort: 3000,
     
     // Протокол (ws для HTTP, wss для HTTPS)
-    protocol: 'wss', // Измените на 'wss' если используете HTTPS
+    protocol: 'ws', // Измените на 'wss' если используете HTTPS
     
     // Настройки для разработки
     development: {
         serverHost: 'localhost',
         serverPort: 3000,
-        protocol: 'wss'
+        protocol: 'ws'
     },
     
     // Настройки для продакшена
     production: {
         serverHost: '87.249.54.192', // Замените на IP вашего сервера
         serverPort: 3000,
-        protocol: 'wss  ' // или 'wss' для HTTPS
+        protocol: 'ws' // или 'wss' для HTTPS
     }
 };
 
