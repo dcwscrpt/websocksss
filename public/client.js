@@ -63,8 +63,23 @@ class WebSocketChat {
         });
     }
 
+    getWebSocketUrl() {
+        // Автоматически определяем URL для WebSocket
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const host = window.location.hostname;
+        const port = window.location.port || (protocol === 'wss:' ? '443' : '80');
+        
+        // Если порт 3000 не указан в URL, добавляем его для WebSocket
+        const wsPort = port === '3000' ? '' : ':3000';
+        
+        return `${protocol}//${host}${wsPort}`;
+    }
+
     connect() {
-        this.ws = new WebSocket('ws://localhost:3000');
+        const wsUrl = this.getWebSocketUrl();
+        console.log('Подключение к WebSocket:', wsUrl);
+        
+        this.ws = new WebSocket(wsUrl);
         
         this.ws.onopen = () => {
             this.isConnected = true;

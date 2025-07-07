@@ -1,22 +1,43 @@
 const WebSocket = require('ws');
-const wss = new WebSocket.Server({ port: 3000 });
+const path = require('path');
+const fs = require('fs');
+
+// Конфигурация
+const PORT = process.env.PORT || 3000;
+const NODE_ENV = process.env.NODE_ENV || 'development';
 
 // Хранилище подключенных клиентов
 const clients = new Map();
 let messageHistory = [];
 
-wss.on('connection', (ws) => {
+// Создаем WebSocket сервер
+const wss = new WebSocket.Server({ port: PORT });
+
+// Логирование
+function log(message, type = 'info') {
+    const timestamp = new Date().toISOString();
+    const logMessage = `[${timestamp}] [${type.toUpperCase()}] ${message}`;
+    
+    if (NODE_ENV === 'production') {
+        console.log(logMessage);
+    } else {
+        console.log(`\x1b[36m${logMessage}\x1b[0m`);
+    }
+}
+
+wss.on('connection', (ws, req) => {
   const clientId = generateId();
   const clientInfo = {
     id: clientId,
     ws: ws,
     username: `Пользователь_${clientId.slice(0, 6)}`,
-    isInCall: false
+    isInCall: false,
+    ip: req.socket.remoteAddress
   };
   
   clients.set(clientId, clientInfo);
   
-  console.log(`Новое подключение! ID: ${clientId}`);
+  log(`Новое подключение! ID: ${clientId}, IP: ${clientInfo.ip}`);
   
   // Отправляем приветствие и информацию о клиенте
   ws.send(JSON.stringify({
@@ -40,7 +61,7 @@ wss.on('connection', (ws) => {
       const data = JSON.parse(message.toString());
       handleMessage(clientId, data);
     } catch (error) {
-      console.log('Получено текстовое сообщение:', message.toString());
+      log(`Получено текстовое сообщение от ${clientId}: ${message.toString()}`);
       // Обработка простых текстовых сообщений
       handleTextMessage(clientId, message.toString());
     }
@@ -49,7 +70,7 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     const client = clients.get(clientId);
     if (client) {
-      console.log(`Клиент ${client.username} отключился`);
+      log(`Клиент ${client.username} отключился`);
       clients.delete(clientId);
       
       // Уведомляем всех об отключении пользователя
@@ -60,6 +81,10 @@ wss.on('connection', (ws) => {
         timestamp: new Date().toISOString()
       });
     }
+  });
+
+  ws.on('error', (error) => {
+    log(`Ошибка WebSocket для клиента ${clientId}: ${error.message}`, 'error');
   });
 });
 
@@ -109,6 +134,7 @@ function handleTextMessage(clientId, content) {
     messageHistory = messageHistory.slice(-100);
   }
 
+  log(`Сообщение от ${client.username}: ${content.substring(0, 50)}${content.length > 50 ? '...' : ''}`);
   broadcastToAll(messageObj);
 }
 
@@ -129,6 +155,7 @@ function handleMediaMessage(clientId, data) {
   };
 
   messageHistory.push(mediaObj);
+  log(`Медиа от ${client.username}: ${data.mediaType} - ${data.fileName}`);
   broadcastToAll(mediaObj);
 }
 
@@ -139,6 +166,7 @@ function handleCall(clientId, data) {
   switch (data.action) {
     case 'start':
       client.isInCall = true;
+      log(`Звонок начат пользователем ${client.username}`);
       broadcastToAll({
         type: 'callStarted',
         userId: clientId,
@@ -148,6 +176,7 @@ function handleCall(clientId, data) {
       break;
     case 'end':
       client.isInCall = false;
+      log(`Звонок завершен пользователем ${client.username}`);
       broadcastToAll({
         type: 'callEnded',
         userId: clientId,
@@ -178,6 +207,7 @@ function updateUsername(clientId, newUsername) {
   const oldUsername = client.username;
   client.username = newUsername;
 
+  log(`Пользователь ${oldUsername} изменил имя на ${newUsername}`);
   broadcastToAll({
     type: 'usernameChanged',
     userId: clientId,
@@ -188,20 +218,58 @@ function updateUsername(clientId, newUsername) {
 }
 
 function broadcastToAll(message, excludeUserId = null) {
+  let sentCount = 0;
   wss.clients.forEach((client) => {
     if (client.readyState === require('ws').OPEN) {
       const clientId = Array.from(clients.entries())
         .find(([id, info]) => info.ws === client)?.[0];
       
       if (clientId !== excludeUserId) {
-        client.send(JSON.stringify(message));
+        try {
+          client.send(JSON.stringify(message));
+          sentCount++;
+        } catch (error) {
+          log(`Ошибка отправки сообщения клиенту ${clientId}: ${error.message}`, 'error');
+        }
       }
     }
   });
+  
+  if (NODE_ENV === 'development') {
+    log(`Сообщение отправлено ${sentCount} клиентам`);
+  }
 }
 
 function generateId() {
   return Math.random().toString(36).substr(2, 9);
 }
 
-console.log('WebSocket сервер запущен на порту 3000'); 
+// Обработка завершения процесса
+process.on('SIGINT', () => {
+  log('Получен сигнал SIGINT, завершение работы...');
+  wss.close(() => {
+    log('WebSocket сервер закрыт');
+    process.exit(0);
+  });
+});
+
+process.on('SIGTERM', () => {
+  log('Получен сигнал SIGTERM, завершение работы...');
+  wss.close(() => {
+    log('WebSocket сервер закрыт');
+    process.exit(0);
+  });
+});
+
+// Обработка необработанных ошибок
+process.on('uncaughtException', (error) => {
+  log(`Необработанная ошибка: ${error.message}`, 'error');
+  log(error.stack, 'error');
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  log(`Необработанное отклонение промиса: ${reason}`, 'error');
+});
+
+log(`WebSocket сервер запущен на порту ${PORT} в режиме ${NODE_ENV}`);
+log(`Всего подключений: ${clients.size}`); 
