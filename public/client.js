@@ -10,6 +10,13 @@ class WebSocketChat {
         this.localStream = null;
         this.remoteStream = null;
         
+        // Настройка сервера - замените на IP вашего сервера
+        this.serverConfig = {
+            host: 'your-server-ip', // Замените на IP вашего сервера
+            port: 3000,
+            protocol: 'ws' // или 'wss' для HTTPS
+        };
+        
         this.initializeElements();
         this.bindEvents();
         this.connect();
@@ -64,15 +71,8 @@ class WebSocketChat {
     }
 
     getWebSocketUrl() {
-        // Автоматически определяем URL для WebSocket
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const host = window.location.hostname;
-        const port = window.location.port || (protocol === 'wss:' ? '443' : '80');
-        
-        // Если порт 3000 не указан в URL, добавляем его для WebSocket
-        const wsPort = port === '3000' ? '' : ':3000';
-        
-        return `${protocol}//${host}${wsPort}`;
+        // Статический URL для подключения к серверу
+        return `${this.serverConfig.protocol}://${this.serverConfig.host}:${this.serverConfig.port}`;
     }
 
     connect() {
