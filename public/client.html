@@ -134,6 +134,20 @@
             transform: scale(1.1);
         }
 
+        .call-btn:disabled {
+            background: #666;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .call-btn.end-call {
+            background: #ff6b6b;
+        }
+
+        .call-btn.end-call:hover {
+            background: #e55555;
+        }
+
         .main-chat {
             flex: 1;
             display: flex;
@@ -157,6 +171,11 @@
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
+        }
+
+        .chat-controls {
+            display: flex;
+            align-items: center;
         }
 
         .connection-status {
@@ -517,9 +536,14 @@
                 <div class="chat-title">
                     <i class="fas fa-comments"></i> WebSocket Чат
                 </div>
-                <div class="connection-status">
-                    <div class="status-indicator" id="statusIndicator"></div>
-                    <span id="statusText">Подключение...</span>
+                <div class="chat-controls">
+                    <button id="endCallBtn" class="call-btn end-call" style="display: none;" title="Завершить звонок">
+                        <i class="fas fa-phone-slash"></i>
+                    </button>
+                    <div class="connection-status">
+                        <div class="status-indicator" id="statusIndicator"></div>
+                        <span id="statusText">Подключение...</span>
+                    </div>
                 </div>
             </div>
             

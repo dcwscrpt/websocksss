@@ -6,13 +6,26 @@ class WebSocketChat {
         this.isConnected = false;
         this.users = new Map();
         this.typingTimeout = null;
+        
+        // WebRTC для звонков
         this.peerConnection = null;
         this.localStream = null;
         this.remoteStream = null;
+        this.currentCallId = null;
+        this.isInCall = false;
+        this.callState = 'idle'; // idle, calling, ringing, connected, ended
+        
+        // Конфигурация WebRTC
+        this.rtcConfig = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        };
         
         // Используем конфигурацию из config.js
         this.serverConfig = window.serverConfig || {
-            host: 'your-server-ip', // Замените на IP вашего сервера
+            host: '87.249.54.192',
             port: 3000,
             protocol: 'ws'
         };
@@ -39,7 +52,8 @@ class WebSocketChat {
             callTitle: document.getElementById('callTitle'),
             callerName: document.getElementById('callerName'),
             acceptCall: document.getElementById('acceptCall'),
-            rejectCall: document.getElementById('rejectCall')
+            rejectCall: document.getElementById('rejectCall'),
+            endCallBtn: document.getElementById('endCallBtn')
         };
     }
 
@@ -59,6 +73,7 @@ class WebSocketChat {
         // Звонки
         this.elements.acceptCall.addEventListener('click', () => this.acceptCall());
         this.elements.rejectCall.addEventListener('click', () => this.rejectCall());
+        this.elements.endCallBtn.addEventListener('click', () => this.endCall());
 
         // Индикатор печати
         this.elements.messageInput.addEventListener('input', () => this.handleTyping());
@@ -131,11 +146,20 @@ class WebSocketChat {
             case 'typing':
                 this.handleUserTyping(data);
                 break;
-            case 'callStarted':
-                this.handleCallStarted(data);
+            case 'incomingCall':
+                this.handleIncomingCall(data);
+                break;
+            case 'callAccepted':
+                this.handleCallAccepted(data);
+                break;
+            case 'callRejected':
+                this.handleCallRejected(data);
                 break;
             case 'callEnded':
                 this.handleCallEnded(data);
+                break;
+            case 'callBusy':
+                this.handleCallBusy(data);
                 break;
             case 'webrtc':
                 this.handleWebRTC(data);
@@ -158,6 +182,14 @@ class WebSocketChat {
                     this.displayMediaMessage(msg);
                 }
             });
+        }
+
+        // Обновляем список пользователей
+        if (data.onlineUsers) {
+            data.onlineUsers.forEach(user => {
+                this.users.set(user.id, user);
+            });
+            this.updateUsersList();
         }
     }
 
@@ -268,7 +300,7 @@ class WebSocketChat {
         this.users.set(data.userId, {
             id: data.userId,
             username: data.username,
-            isTyping: false
+            isInCall: false
         });
         this.updateUsersList();
         this.showSystemMessage(`${data.username} присоединился к чату`);
@@ -305,33 +337,266 @@ class WebSocketChat {
         }
     }
 
-    handleCallStarted(data) {
-        this.showSystemMessage(`${data.username} начал звонок`);
+    // ===== ФУНКЦИИ ЗВОНКОВ =====
+
+    async startCall(targetUserId) {
+        if (this.isInCall) {
+            this.showNotification('Вы уже в звонке');
+            return;
+        }
+
+        try {
+            // Получаем доступ к медиа устройствам
+            this.localStream = await navigator.mediaDevices.getUserMedia({
+                video: true,
+                audio: true
+            });
+
+            this.callState = 'calling';
+            this.currentCallId = this.generateId();
+
+            // Отправляем запрос на звонок
+            this.ws.send(JSON.stringify({
+                type: 'call',
+                action: 'start',
+                targetUserId: targetUserId
+            }));
+
+            this.showCallModal('Исходящий звонок', 'Вызов...');
+            this.showNotification('Начинаем звонок...');
+
+        } catch (error) {
+            console.error('Ошибка получения медиа:', error);
+            this.showNotification('Ошибка доступа к камере/микрофону');
+        }
     }
 
-    handleCallEnded(data) {
-        this.showSystemMessage(`${data.username} завершил звонок`);
+    handleIncomingCall(data) {
+        this.currentCallId = data.callId;
+        this.callState = 'ringing';
+        
+        this.showCallModal('Входящий звонок', `От: ${data.callerName}`);
+        this.showNotification(`Входящий звонок от ${data.callerName}`);
+        
+        // Автоматически скрываем модальное окно через 30 секунд
+        setTimeout(() => {
+            if (this.callState === 'ringing') {
+                this.rejectCall();
+            }
+        }, 30000);
+    }
+
+    async acceptCall() {
+        if (this.callState !== 'ringing') return;
+
+        try {
+            // Получаем доступ к медиа устройствам
+            this.localStream = await navigator.mediaDevices.getUserMedia({
+                video: true,
+                audio: true
+            });
+
+            this.callState = 'connected';
+            this.isInCall = true;
+
+            // Отправляем принятие звонка
+            this.ws.send(JSON.stringify({
+                type: 'call',
+                action: 'accept',
+                callId: this.currentCallId
+            }));
+
+            this.hideCallModal();
+            this.initializePeerConnection();
+            this.showEndCallButton();
+            this.showNotification('Звонок принят');
+
+        } catch (error) {
+            console.error('Ошибка получения медиа:', error);
+            this.showNotification('Ошибка доступа к камере/микрофону');
+            this.rejectCall();
+        }
+    }
+
+    rejectCall() {
+        if (this.callState === 'ringing') {
+            this.ws.send(JSON.stringify({
+                type: 'call',
+                action: 'reject',
+                callId: this.currentCallId
+            }));
+        }
+        
         this.endCall();
     }
 
-    handleWebRTC(data) {
-        if (!this.peerConnection) return;
-        
-        switch (data.action) {
-            case 'offer':
-                this.peerConnection.setRemoteDescription(new RTCSessionDescription(data.data));
-                this.peerConnection.createAnswer().then(answer => {
-                    this.peerConnection.setLocalDescription(answer);
-                    this.sendWebRTCMessage('answer', answer, data.fromUserId);
-                });
-                break;
-            case 'answer':
-                this.peerConnection.setRemoteDescription(new RTCSessionDescription(data.data));
-                break;
-            case 'ice-candidate':
-                this.peerConnection.addIceCandidate(new RTCIceCandidate(data.data));
-                break;
+    handleCallAccepted(data) {
+        this.callState = 'connected';
+        this.isInCall = true;
+        this.hideCallModal();
+        this.initializePeerConnection();
+        this.showEndCallButton();
+        this.showNotification('Звонок принят');
+    }
+
+    handleCallRejected(data) {
+        this.callState = 'ended';
+        this.hideCallModal();
+        this.hideEndCallButton();
+        this.endCall();
+        this.showNotification('Звонок отклонен');
+    }
+
+    handleCallEnded(data) {
+        this.callState = 'ended';
+        this.hideCallModal();
+        this.hideEndCallButton();
+        this.endCall();
+        this.showNotification('Звонок завершен');
+    }
+
+    handleCallBusy(data) {
+        this.callState = 'ended';
+        this.hideCallModal();
+        this.hideEndCallButton();
+        this.endCall();
+        this.showNotification('Пользователь занят');
+    }
+
+    endCall() {
+        if (this.currentCallId) {
+            this.ws.send(JSON.stringify({
+                type: 'call',
+                action: 'end',
+                callId: this.currentCallId
+            }));
         }
+
+        this.callState = 'idle';
+        this.isInCall = false;
+        this.currentCallId = null;
+        this.hideCallModal();
+        this.hideEndCallButton();
+
+        // Останавливаем медиа потоки
+        if (this.localStream) {
+            this.localStream.getTracks().forEach(track => track.stop());
+            this.localStream = null;
+        }
+
+        // Закрываем WebRTC соединение
+        if (this.peerConnection) {
+            this.peerConnection.close();
+            this.peerConnection = null;
+        }
+
+        // Удаляем удаленное видео
+        const remoteVideo = document.getElementById('remoteVideo');
+        if (remoteVideo) {
+            remoteVideo.remove();
+        }
+
+        this.updateUsersList();
+    }
+
+    initializePeerConnection() {
+        this.peerConnection = new RTCPeerConnection(this.rtcConfig);
+
+        // Добавляем локальный поток
+        if (this.localStream) {
+            this.localStream.getTracks().forEach(track => {
+                this.peerConnection.addTrack(track, this.localStream);
+            });
+        }
+
+        // Обработка входящих потоков
+        this.peerConnection.ontrack = (event) => {
+            this.remoteStream = event.streams[0];
+            this.displayRemoteVideo();
+        };
+
+        // Обработка ICE кандидатов
+        this.peerConnection.onicecandidate = (event) => {
+            if (event.candidate) {
+                this.sendWebRTCMessage('ice-candidate', event.candidate);
+            }
+        };
+
+        // Обработка изменения состояния соединения
+        this.peerConnection.onconnectionstatechange = () => {
+            console.log('WebRTC состояние:', this.peerConnection.connectionState);
+            if (this.peerConnection.connectionState === 'failed') {
+                this.showNotification('Ошибка соединения');
+                this.endCall();
+            }
+        };
+    }
+
+    async handleWebRTC(data) {
+        if (!this.peerConnection) return;
+
+        try {
+            switch (data.action) {
+                case 'offer':
+                    await this.peerConnection.setRemoteDescription(new RTCSessionDescription(data.data));
+                    const answer = await this.peerConnection.createAnswer();
+                    await this.peerConnection.setLocalDescription(answer);
+                    this.sendWebRTCMessage('answer', answer, data.fromUserId);
+                    break;
+
+                case 'answer':
+                    await this.peerConnection.setRemoteDescription(new RTCSessionDescription(data.data));
+                    break;
+
+                case 'ice-candidate':
+                    await this.peerConnection.addIceCandidate(new RTCIceCandidate(data.data));
+                    break;
+            }
+        } catch (error) {
+            console.error('WebRTC ошибка:', error);
+        }
+    }
+
+    sendWebRTCMessage(action, data, targetUserId = null) {
+        this.ws.send(JSON.stringify({
+            type: 'call',
+            action: action,
+            data: data,
+            targetUserId: targetUserId
+        }));
+    }
+
+    displayRemoteVideo() {
+        // Создаем элемент для отображения удаленного видео
+        let remoteVideo = document.getElementById('remoteVideo');
+        if (!remoteVideo) {
+            remoteVideo = document.createElement('video');
+            remoteVideo.id = 'remoteVideo';
+            remoteVideo.autoplay = true;
+            remoteVideo.playsInline = true;
+            remoteVideo.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                width: 200px;
+                height: 150px;
+                background: #000;
+                border-radius: 10px;
+                z-index: 1000;
+            `;
+            document.body.appendChild(remoteVideo);
+        }
+        remoteVideo.srcObject = this.remoteStream;
+    }
+
+    showCallModal(title, caller) {
+        this.elements.callTitle.textContent = title;
+        this.elements.callerName.textContent = caller;
+        this.elements.callModal.style.display = 'flex';
+    }
+
+    hideCallModal() {
+        this.elements.callModal.style.display = 'none';
     }
 
     sendMessage() {
@@ -395,98 +660,6 @@ class WebSocketChat {
         }, 1000);
     }
 
-    startCall(targetUserId) {
-        this.showCallModal('Исходящий звонок', 'Вызов...');
-        
-        navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-            .then(stream => {
-                this.localStream = stream;
-                this.initializePeerConnection();
-                
-                this.ws.send(JSON.stringify({
-                    type: 'call',
-                    action: 'start',
-                    targetUserId: targetUserId
-                }));
-            })
-            .catch(error => {
-                console.error('Ошибка получения медиа:', error);
-                this.hideCallModal();
-            });
-    }
-
-    acceptCall() {
-        navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-            .then(stream => {
-                this.localStream = stream;
-                this.initializePeerConnection();
-                this.hideCallModal();
-            })
-            .catch(error => {
-                console.error('Ошибка получения медиа:', error);
-            });
-    }
-
-    rejectCall() {
-        this.hideCallModal();
-        this.ws.send(JSON.stringify({
-            type: 'call',
-            action: 'end'
-        }));
-    }
-
-    endCall() {
-        if (this.localStream) {
-            this.localStream.getTracks().forEach(track => track.stop());
-            this.localStream = null;
-        }
-        if (this.peerConnection) {
-            this.peerConnection.close();
-            this.peerConnection = null;
-        }
-        this.hideCallModal();
-    }
-
-    initializePeerConnection() {
-        this.peerConnection = new RTCPeerConnection({
-            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-        });
-
-        this.localStream.getTracks().forEach(track => {
-            this.peerConnection.addTrack(track, this.localStream);
-        });
-
-        this.peerConnection.ontrack = (event) => {
-            this.remoteStream = event.streams[0];
-            // Здесь можно добавить отображение удаленного видео
-        };
-
-        this.peerConnection.onicecandidate = (event) => {
-            if (event.candidate) {
-                this.sendWebRTCMessage('ice-candidate', event.candidate);
-            }
-        };
-    }
-
-    sendWebRTCMessage(action, data, targetUserId = null) {
-        this.ws.send(JSON.stringify({
-            type: 'call',
-            action: action,
-            data: data,
-            targetUserId: targetUserId
-        }));
-    }
-
-    showCallModal(title, caller) {
-        this.elements.callTitle.textContent = title;
-        this.elements.callerName.textContent = caller;
-        this.elements.callModal.style.display = 'flex';
-    }
-
-    hideCallModal() {
-        this.elements.callModal.style.display = 'none';
-    }
-
     updateUsersList() {
         this.elements.usersList.innerHTML = '';
         
@@ -494,17 +667,19 @@ class WebSocketChat {
             const userDiv = document.createElement('div');
             userDiv.className = 'user-item';
             
+            const callButton = user.isInCall ? 
+                '<button class="call-btn" disabled title="Пользователь в звонке"><i class="fas fa-phone-slash"></i></button>' :
+                `<button class="call-btn" onclick="chat.startCall('${user.id}')" title="Позвонить"><i class="fas fa-phone"></i></button>`;
+            
             userDiv.innerHTML = `
                 <div class="user-avatar">
                     <i class="fas fa-user"></i>
                 </div>
                 <div class="user-info">
                     <div class="user-name">${user.username}</div>
-                    <div class="user-status">${user.isTyping ? 'Печатает...' : 'Онлайн'}</div>
+                    <div class="user-status">${user.isInCall ? 'В звонке' : 'Онлайн'}</div>
                 </div>
-                <button class="call-btn" onclick="chat.startCall('${user.id}')" title="Позвонить">
-                    <i class="fas fa-phone"></i>
-                </button>
+                ${callButton}
             `;
             
             this.elements.usersList.appendChild(userDiv);
@@ -595,6 +770,18 @@ class WebSocketChat {
         link.href = dataUrl;
         link.download = fileName;
         link.click();
+    }
+
+    generateId() {
+        return Math.random().toString(36).substr(2, 9);
+    }
+
+    showEndCallButton() {
+        this.elements.endCallBtn.style.display = 'block';
+    }
+
+    hideEndCallButton() {
+        this.elements.endCallBtn.style.display = 'none';
     }
 }
 

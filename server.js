@@ -11,6 +11,9 @@ const NODE_ENV = process.env.NODE_ENV || 'development';
 const clients = new Map();
 let messageHistory = [];
 
+// Хранилище активных звонков
+const activeCalls = new Map();
+
 // Создаем HTTP сервер
 const server = http.createServer((req, res) => {
     // Настройка CORS
@@ -95,6 +98,7 @@ wss.on('connection', (ws, req) => {
     ws: ws,
     username: `Пользователь_${clientId.slice(0, 6)}`,
     isInCall: false,
+    currentCallId: null,
     ip: req.socket.remoteAddress
   };
   
@@ -108,7 +112,12 @@ wss.on('connection', (ws, req) => {
     message: 'Добро пожаловать в WebSocket!',
     clientId: clientId,
     username: clientInfo.username,
-    history: messageHistory
+    history: messageHistory,
+    onlineUsers: Array.from(clients.values()).map(c => ({
+      id: c.id,
+      username: c.username,
+      isInCall: c.isInCall
+    }))
   }));
   
   // Уведомляем всех о новом пользователе
@@ -134,6 +143,12 @@ wss.on('connection', (ws, req) => {
     const client = clients.get(clientId);
     if (client) {
       log(`Клиент ${client.username} отключился`);
+      
+      // Если клиент был в звонке, завершаем его
+      if (client.currentCallId && activeCalls.has(client.currentCallId)) {
+        endCall(client.currentCallId, clientId);
+      }
+      
       clients.delete(clientId);
       
       // Уведомляем всех об отключении пользователя
@@ -228,24 +243,16 @@ function handleCall(clientId, data) {
 
   switch (data.action) {
     case 'start':
-      client.isInCall = true;
-      log(`Звонок начат пользователем ${client.username}`);
-      broadcastToAll({
-        type: 'callStarted',
-        userId: clientId,
-        username: client.username,
-        timestamp: new Date().toISOString()
-      });
+      startCall(clientId, data.targetUserId);
+      break;
+    case 'accept':
+      acceptCall(clientId, data.callId);
+      break;
+    case 'reject':
+      rejectCall(clientId, data.callId);
       break;
     case 'end':
-      client.isInCall = false;
-      log(`Звонок завершен пользователем ${client.username}`);
-      broadcastToAll({
-        type: 'callEnded',
-        userId: clientId,
-        username: client.username,
-        timestamp: new Date().toISOString()
-      });
+      endCall(client.currentCallId, clientId);
       break;
     case 'offer':
     case 'answer':
@@ -261,6 +268,199 @@ function handleCall(clientId, data) {
       }
       break;
   }
+}
+
+function startCall(callerId, targetUserId) {
+  const caller = clients.get(callerId);
+  const target = clients.get(targetUserId);
+  
+  if (!caller || !target) {
+    log(`Ошибка: пользователь не найден для звонка`, 'error');
+    return;
+  }
+
+  if (target.isInCall) {
+    // Отправляем уведомление, что пользователь занят
+    caller.ws.send(JSON.stringify({
+      type: 'callBusy',
+      targetUserId: targetUserId,
+      message: 'Пользователь занят в другом звонке'
+    }));
+    return;
+  }
+
+  const callId = generateId();
+  const callInfo = {
+    id: callId,
+    caller: callerId,
+    target: targetUserId,
+    status: 'ringing',
+    startTime: new Date().toISOString()
+  };
+
+  activeCalls.set(callId, callInfo);
+  caller.currentCallId = callId;
+  caller.isInCall = true;
+
+  log(`Звонок ${callId} начат: ${caller.username} → ${target.username}`);
+
+  // Отправляем входящий звонок целевому пользователю
+  target.ws.send(JSON.stringify({
+    type: 'incomingCall',
+    callId: callId,
+    callerId: callerId,
+    callerName: caller.username,
+    timestamp: new Date().toISOString()
+  }));
+
+  // Уведомляем всех о начале звонка
+  broadcastToAll({
+    type: 'callStarted',
+    callId: callId,
+    callerId: callerId,
+    callerName: caller.username,
+    targetId: targetUserId,
+    targetName: target.username,
+    timestamp: new Date().toISOString()
+  });
+}
+
+function acceptCall(accepterId, callId) {
+  const call = activeCalls.get(callId);
+  if (!call) {
+    log(`Звонок ${callId} не найден`, 'error');
+    return;
+  }
+
+  const accepter = clients.get(accepterId);
+  const caller = clients.get(call.caller);
+  
+  if (!accepter || !caller) {
+    log(`Ошибка: пользователь не найден для принятия звонка`, 'error');
+    return;
+  }
+
+  call.status = 'active';
+  call.acceptTime = new Date().toISOString();
+  accepter.currentCallId = callId;
+  accepter.isInCall = true;
+
+  log(`Звонок ${callId} принят: ${accepter.username}`);
+
+  // Уведомляем звонящего о принятии звонка
+  caller.ws.send(JSON.stringify({
+    type: 'callAccepted',
+    callId: callId,
+    accepterId: accepterId,
+    accepterName: accepter.username,
+    timestamp: new Date().toISOString()
+  }));
+
+  // Уведомляем всех о принятии звонка
+  broadcastToAll({
+    type: 'callAccepted',
+    callId: callId,
+    callerId: call.caller,
+    callerName: caller.username,
+    accepterId: accepterId,
+    accepterName: accepter.username,
+    timestamp: new Date().toISOString()
+  });
+}
+
+function rejectCall(rejecterId, callId) {
+  const call = activeCalls.get(callId);
+  if (!call) {
+    log(`Звонок ${callId} не найден`, 'error');
+    return;
+  }
+
+  const rejecter = clients.get(rejecterId);
+  const caller = clients.get(call.caller);
+  
+  if (!rejecter || !caller) {
+    log(`Ошибка: пользователь не найден для отклонения звонка`, 'error');
+    return;
+  }
+
+  log(`Звонок ${callId} отклонен: ${rejecter.username}`);
+
+  // Уведомляем звонящего об отклонении звонка
+  caller.ws.send(JSON.stringify({
+    type: 'callRejected',
+    callId: callId,
+    rejecterId: rejecterId,
+    rejecterName: rejecter.username,
+    timestamp: new Date().toISOString()
+  }));
+
+  // Сбрасываем состояние звонящего
+  caller.currentCallId = null;
+  caller.isInCall = false;
+
+  // Удаляем звонок
+  activeCalls.delete(callId);
+
+  // Уведомляем всех об отклонении звонка
+  broadcastToAll({
+    type: 'callRejected',
+    callId: callId,
+    callerId: call.caller,
+    callerName: caller.username,
+    rejecterId: rejecterId,
+    rejecterName: rejecter.username,
+    timestamp: new Date().toISOString()
+  });
+}
+
+function endCall(callId, userId) {
+  const call = activeCalls.get(callId);
+  if (!call) {
+    log(`Звонок ${callId} не найден для завершения`, 'error');
+    return;
+  }
+
+  const caller = clients.get(call.caller);
+  const target = clients.get(call.target);
+  
+  log(`Звонок ${callId} завершен пользователем ${userId}`);
+
+  // Сбрасываем состояние участников
+  if (caller) {
+    caller.currentCallId = null;
+    caller.isInCall = false;
+  }
+  if (target) {
+    target.currentCallId = null;
+    target.isInCall = false;
+  }
+
+  // Уведомляем всех участников о завершении звонка
+  const participants = [call.caller, call.target].filter(id => clients.has(id));
+  participants.forEach(participantId => {
+    const participant = clients.get(participantId);
+    if (participant) {
+      participant.ws.send(JSON.stringify({
+        type: 'callEnded',
+        callId: callId,
+        endedBy: userId,
+        timestamp: new Date().toISOString()
+      }));
+    }
+  });
+
+  // Удаляем звонок
+  activeCalls.delete(callId);
+
+  // Уведомляем всех о завершении звонка
+  broadcastToAll({
+    type: 'callEnded',
+    callId: callId,
+    callerId: call.caller,
+    targetId: call.target,
+    endedBy: userId,
+    timestamp: new Date().toISOString()
+  });
 }
 
 function updateUsername(clientId, newUsername) {
