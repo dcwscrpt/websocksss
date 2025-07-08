@@ -8,9 +8,6 @@ const config = {
     // Порт WebSocket сервера
     serverPort: 3000,
     
-    // Протокол (ws для HTTP, wss для HTTPS)
-    protocol: 'ws', // Измените на 'wss' если используете HTTPS
-    
     // Настройки для разработки
     development: {
         serverHost: 'localhost',
@@ -30,11 +27,14 @@ const config = {
 const isDevelopment = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 const currentConfig = isDevelopment ? config.development : config.production;
 
+// Автоматически определяем протокол для WebSocket
+const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+
 // Экспортируем конфигурацию
 window.serverConfig = {
     host: currentConfig.serverHost,
     port: currentConfig.serverPort,
-    protocol: currentConfig.protocol
+    protocol: wsProtocol
 };
 
 console.log('Конфигурация сервера:', window.serverConfig); 

@@ -1,6 +1,7 @@
 const WebSocket = require('ws');
 const path = require('path');
 const fs = require('fs');
+const https = require('https');
 const http = require('http');
 
 // Конфигурация
@@ -14,70 +15,94 @@ let messageHistory = [];
 // Хранилище активных звонков
 const activeCalls = new Map();
 
-// Создаем HTTP сервер
-const server = http.createServer((req, res) => {
-    // Настройка CORS
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+// === HTTPS CONFIGURATION ===
+let httpsServer;
+let wss;
 
-    // Обработка OPTIONS запросов
-    if (req.method === 'OPTIONS') {
-        res.writeHead(200);
-        res.end();
-        return;
-    }
-
-    let filePath = './public' + (req.url === '/' ? '/client.html' : req.url);
-    
-    // Проверяем, существует ли файл
-    if (!fs.existsSync(filePath)) {
-        // Если файл не найден, возвращаем client.html
-        filePath = './public/client.html';
-    }
-
-    const extname = String(path.extname(filePath)).toLowerCase();
-    const mimeTypes = {
-        '.html': 'text/html',
-        '.js': 'application/javascript',
-        '.css': 'text/css',
-        '.json': 'application/json',
-        '.png': 'image/png',
-        '.jpg': 'image/jpg',
-        '.gif': 'image/gif',
-        '.svg': 'image/svg+xml',
-        '.wav': 'audio/wav',
-        '.mp4': 'video/mp4',
-        '.woff': 'application/font-woff',
-        '.ttf': 'application/font-ttf',
-        '.eot': 'application/vnd.ms-fontobject',
-        '.otf': 'application/font-otf',
-        '.wasm': 'application/wasm'
+try {
+    const httpsOptions = {
+        key: fs.readFileSync('key.pem'),
+        cert: fs.readFileSync('cert.pem')
     };
+    
+    httpsServer = https.createServer(httpsOptions, (req, res) => {
+        // Настройка CORS
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-    const contentType = mimeTypes[extname] || 'application/octet-stream';
-
-    fs.readFile(filePath, (error, content) => {
-        if (error) {
-            if (error.code === 'ENOENT') {
-                // Файл не найден, возвращаем 404
-                res.writeHead(404, { 'Content-Type': 'text/html' });
-                res.end('<h1>404 - Файл не найден</h1>', 'utf-8');
-            } else {
-                // Ошибка сервера
-                res.writeHead(500);
-                res.end(`Ошибка сервера: ${error.code}`, 'utf-8');
-            }
-        } else {
-            // Успешный ответ
-            res.writeHead(200, { 'Content-Type': contentType });
-            res.end(content, 'utf-8');
+        // Обработка OPTIONS запросов
+        if (req.method === 'OPTIONS') {
+            res.writeHead(200);
+            res.end();
+            return;
         }
-    });
-});
 
-// Создаем WebSocket сервер на основе HTTP сервера
-const wss = new WebSocket.Server({ server });
+        let filePath = './public' + (req.url === '/' ? '/client.html' : req.url);
+        
+        // Проверяем, существует ли файл
+        if (!fs.existsSync(filePath)) {
+            // Если файл не найден, возвращаем client.html
+            filePath = './public/client.html';
+        }
+
+        const extname = String(path.extname(filePath)).toLowerCase();
+        const mimeTypes = {
+            '.html': 'text/html',
+            '.js': 'application/javascript',
+            '.css': 'text/css',
+            '.json': 'application/json',
+            '.png': 'image/png',
+            '.jpg': 'image/jpg',
+            '.gif': 'image/gif',
+            '.svg': 'image/svg+xml',
+            '.wav': 'audio/wav',
+            '.mp4': 'video/mp4',
+            '.woff': 'application/font-woff',
+            '.ttf': 'application/font-ttf',
+            '.eot': 'application/vnd.ms-fontobject',
+            '.otf': 'application/font-otf',
+            '.wasm': 'application/wasm'
+        };
+
+        const contentType = mimeTypes[extname] || 'application/octet-stream';
+
+        fs.readFile(filePath, (error, content) => {
+            if (error) {
+                if (error.code === 'ENOENT') {
+                    // Файл не найден, возвращаем 404
+                    res.writeHead(404, { 'Content-Type': 'text/html' });
+                    res.end('<h1>404 - Файл не найден</h1>', 'utf-8');
+                } else {
+                    // Ошибка сервера
+                    res.writeHead(500);
+                    res.end(`Ошибка сервера: ${error.code}`, 'utf-8');
+                }
+            } else {
+                // Успешный ответ
+                res.writeHead(200, { 'Content-Type': contentType });
+                res.end(content, 'utf-8');
+            }
+        });
+    });
+
+    wss = new WebSocket.Server({ server: httpsServer });
+    httpsServer.listen(443, () => {
+        console.log('HTTPS server running on port 443');
+    });
+} catch (e) {
+    console.error('Не удалось запустить HTTPS сервер:', e);
+}
+
+// (Опционально) HTTP сервер для редиректа на HTTPS
+const httpServer = http.createServer((req, res) => {
+    // Редирект на https
+    res.writeHead(301, { "Location": "https://" + req.headers['host'] + req.url });
+    res.end();
+});
+httpServer.listen(80, () => {
+    console.log('HTTP server (redirect) running on port 80');
+});
 
 // Логирование
 function log(message, type = 'info') {
@@ -520,9 +545,9 @@ function gracefulShutdown(signal) {
     }
   });
   
-  // Закрываем HTTP сервер с таймаутом
-  server.close(() => {
-    log('HTTP сервер закрыт');
+  // Закрываем HTTPS сервер с таймаутом
+  httpsServer.close(() => {
+    log('HTTPS сервер закрыт');
     process.exit(0);
   });
   
@@ -551,8 +576,8 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // Запуск сервера
 server.listen(PORT, () => {
-  log(`HTTP сервер запущен на порту ${PORT} в режиме ${NODE_ENV}`);
+  log(`HTTPS сервер запущен на порту ${PORT} в режиме ${NODE_ENV}`);
   log(`WebSocket сервер готов к подключениям`);
-  log(`Доступ к приложению: http://localhost:${PORT}`);
+  log(`Доступ к приложению: https://localhost:${PORT}`);
   log(`Всего подключений: ${clients.size}`);
 }); 
