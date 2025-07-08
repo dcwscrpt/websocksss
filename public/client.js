@@ -53,7 +53,8 @@ class WebSocketChat {
             callerName: document.getElementById('callerName'),
             acceptCall: document.getElementById('acceptCall'),
             rejectCall: document.getElementById('rejectCall'),
-            endCallBtn: document.getElementById('endCallBtn')
+            endCallBtn: document.getElementById('endCallBtn'),
+            requestMediaBtn: document.getElementById('requestMediaBtn')
         };
     }
 
@@ -74,6 +75,9 @@ class WebSocketChat {
         this.elements.acceptCall.addEventListener('click', () => this.acceptCall());
         this.elements.rejectCall.addEventListener('click', () => this.rejectCall());
         this.elements.endCallBtn.addEventListener('click', () => this.endCall());
+
+        // Запрос доступа к медиа
+        this.elements.requestMediaBtn.addEventListener('click', () => this.requestMediaAccess());
 
         // Индикатор печати
         this.elements.messageInput.addEventListener('input', () => this.handleTyping());
@@ -99,6 +103,8 @@ class WebSocketChat {
         this.ws.onopen = () => {
             this.isConnected = true;
             this.updateConnectionStatus('Подключено', true);
+            // Запрашиваем доступ к медиа после подключения
+            this.requestMediaAccess();
         };
 
         this.ws.onmessage = (event) => {
@@ -121,6 +127,157 @@ class WebSocketChat {
             console.error('WebSocket ошибка:', error);
             this.updateConnectionStatus('Ошибка подключения', false);
         };
+    }
+
+    // Запрос доступа к медиа устройствам
+    async requestMediaAccess() {
+        const getUserMedia = this.checkMediaSupport();
+        if (!getUserMedia) {
+            this.showNotification('Ваш браузер не поддерживает видеозвонки');
+            return;
+        }
+
+        // Обновляем состояние кнопки
+        this.elements.requestMediaBtn.disabled = true;
+        this.elements.requestMediaBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Запрос...';
+
+        try {
+            // Запрашиваем доступ к медиа
+            this.localStream = await getUserMedia({
+                video: {
+                    width: { ideal: 640 },
+                    height: { ideal: 480 }
+                },
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true
+                }
+            });
+
+            // Создаем предварительный просмотр
+            this.createVideoPreview();
+            this.showNotification('Доступ к камере и микрофону получен');
+
+            // Обновляем кнопку
+            this.elements.requestMediaBtn.innerHTML = '<i class="fas fa-check"></i> Доступ получен';
+            this.elements.requestMediaBtn.style.background = 'linear-gradient(45deg, #4ecdc4, #45b7aa)';
+
+        } catch (error) {
+            console.error('Ошибка получения медиа:', error);
+            
+            let errorMessage = 'Ошибка доступа к камере/микрофону';
+            
+            if (error.name === 'NotAllowedError') {
+                errorMessage = 'Доступ к камере/микрофону запрещен. Разрешите доступ в настройках браузера.';
+            } else if (error.name === 'NotFoundError') {
+                errorMessage = 'Камера или микрофон не найдены. Проверьте подключение устройств.';
+            } else if (error.name === 'NotSupportedError') {
+                errorMessage = 'Ваш браузер не поддерживает видеозвонки. Попробуйте Chrome или Firefox.';
+            } else if (error.name === 'NotReadableError') {
+                errorMessage = 'Камера или микрофон уже используются другим приложением.';
+            }
+            
+            this.showNotification(errorMessage);
+
+            // Возвращаем кнопку в исходное состояние
+            this.elements.requestMediaBtn.disabled = false;
+            this.elements.requestMediaBtn.innerHTML = '<i class="fas fa-video"></i> Разрешить камеру';
+        }
+    }
+
+    // Создание предварительного просмотра видео
+    createVideoPreview() {
+        // Удаляем существующий предварительный просмотр
+        const existingPreview = document.getElementById('videoPreview');
+        if (existingPreview) {
+            existingPreview.remove();
+        }
+
+        // Создаем контейнер для предварительного просмотра
+        const previewContainer = document.createElement('div');
+        previewContainer.id = 'videoPreview';
+        previewContainer.style.cssText = `
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            width: 200px;
+            height: 150px;
+            background: #000;
+            border-radius: 10px;
+            overflow: hidden;
+            z-index: 999;
+            border: 2px solid #4ecdc4;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        `;
+
+        // Создаем видео элемент
+        const video = document.createElement('video');
+        video.autoplay = true;
+        video.muted = true;
+        video.playsInline = true;
+        video.style.cssText = `
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        `;
+
+        // Добавляем индикатор состояния
+        const statusIndicator = document.createElement('div');
+        statusIndicator.style.cssText = `
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            width: 12px;
+            height: 12px;
+            background: #4ecdc4;
+            border-radius: 50%;
+            border: 2px solid #fff;
+        `;
+
+        // Добавляем кнопку закрытия
+        const closeBtn = document.createElement('button');
+        closeBtn.innerHTML = '×';
+        closeBtn.style.cssText = `
+            position: absolute;
+            top: 5px;
+            left: 5px;
+            width: 20px;
+            height: 20px;
+            background: rgba(255, 107, 107, 0.8);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        `;
+        closeBtn.onclick = () => {
+            previewContainer.remove();
+        };
+
+        // Добавляем элементы в контейнер
+        previewContainer.appendChild(video);
+        previewContainer.appendChild(statusIndicator);
+        previewContainer.appendChild(closeBtn);
+
+        // Добавляем в документ
+        document.body.appendChild(previewContainer);
+
+        // Подключаем поток к видео
+        video.srcObject = this.localStream;
+
+        // Добавляем hover эффект
+        previewContainer.addEventListener('mouseenter', () => {
+            previewContainer.style.transform = 'scale(1.05)';
+            previewContainer.style.transition = 'transform 0.2s ease';
+        });
+
+        previewContainer.addEventListener('mouseleave', () => {
+            previewContainer.style.transform = 'scale(1)';
+        });
     }
 
     handleMessage(data) {
@@ -374,57 +531,24 @@ class WebSocketChat {
             return;
         }
 
-        // Проверяем поддержку медиа
-        const getUserMedia = this.checkMediaSupport();
-        if (!getUserMedia) {
-            this.showNotification('Ваш браузер не поддерживает видеозвонки');
+        // Проверяем, есть ли уже доступ к медиа
+        if (!this.localStream) {
+            this.showNotification('Сначала разрешите доступ к камере и микрофону');
             return;
         }
 
-        try {
-            // Получаем доступ к медиа устройствам
-            this.localStream = await getUserMedia({
-                video: {
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 }
-                },
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true
-                }
-            });
+        this.callState = 'calling';
+        this.currentCallId = this.generateId();
 
-            this.callState = 'calling';
-            this.currentCallId = this.generateId();
+        // Отправляем запрос на звонок
+        this.ws.send(JSON.stringify({
+            type: 'call',
+            action: 'start',
+            targetUserId: targetUserId
+        }));
 
-            // Отправляем запрос на звонок
-            this.ws.send(JSON.stringify({
-                type: 'call',
-                action: 'start',
-                targetUserId: targetUserId
-            }));
-
-            this.showCallModal('Исходящий звонок', 'Вызов...');
-            this.showNotification('Начинаем звонок...');
-
-        } catch (error) {
-            console.error('Ошибка получения медиа:', error);
-            
-            let errorMessage = 'Ошибка доступа к камере/микрофону';
-            
-            if (error.name === 'NotAllowedError') {
-                errorMessage = 'Доступ к камере/микрофону запрещен. Разрешите доступ в настройках браузера.';
-            } else if (error.name === 'NotFoundError') {
-                errorMessage = 'Камера или микрофон не найдены. Проверьте подключение устройств.';
-            } else if (error.name === 'NotSupportedError') {
-                errorMessage = 'Ваш браузер не поддерживает видеозвонки. Попробуйте Chrome или Firefox.';
-            } else if (error.name === 'NotReadableError') {
-                errorMessage = 'Камера или микрофон уже используются другим приложением.';
-            }
-            
-            this.showNotification(errorMessage);
-            this.hideCallModal();
-        }
+        this.showCallModal('Исходящий звонок', 'Вызов...');
+        this.showNotification('Начинаем звонок...');
     }
 
     handleIncomingCall(data) {
@@ -445,60 +569,27 @@ class WebSocketChat {
     async acceptCall() {
         if (this.callState !== 'ringing') return;
 
-        // Проверяем поддержку медиа
-        const getUserMedia = this.checkMediaSupport();
-        if (!getUserMedia) {
-            this.showNotification('Ваш браузер не поддерживает видеозвонки');
+        // Проверяем, есть ли уже доступ к медиа
+        if (!this.localStream) {
+            this.showNotification('Сначала разрешите доступ к камере и микрофону');
             this.rejectCall();
             return;
         }
 
-        try {
-            // Получаем доступ к медиа устройствам
-            this.localStream = await getUserMedia({
-                video: {
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 }
-                },
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true
-                }
-            });
+        this.callState = 'connected';
+        this.isInCall = true;
 
-            this.callState = 'connected';
-            this.isInCall = true;
+        // Отправляем принятие звонка
+        this.ws.send(JSON.stringify({
+            type: 'call',
+            action: 'accept',
+            callId: this.currentCallId
+        }));
 
-            // Отправляем принятие звонка
-            this.ws.send(JSON.stringify({
-                type: 'call',
-                action: 'accept',
-                callId: this.currentCallId
-            }));
-
-            this.hideCallModal();
-            this.initializePeerConnection();
-            this.showEndCallButton();
-            this.showNotification('Звонок принят');
-
-        } catch (error) {
-            console.error('Ошибка получения медиа:', error);
-            
-            let errorMessage = 'Ошибка доступа к камере/микрофону';
-            
-            if (error.name === 'NotAllowedError') {
-                errorMessage = 'Доступ к камере/микрофону запрещен. Разрешите доступ в настройках браузера.';
-            } else if (error.name === 'NotFoundError') {
-                errorMessage = 'Камера или микрофон не найдены. Проверьте подключение устройств.';
-            } else if (error.name === 'NotSupportedError') {
-                errorMessage = 'Ваш браузер не поддерживает видеозвонки. Попробуйте Chrome или Firefox.';
-            } else if (error.name === 'NotReadableError') {
-                errorMessage = 'Камера или микрофон уже используются другим приложением.';
-            }
-            
-            this.showNotification(errorMessage);
-            this.rejectCall();
-        }
+        this.hideCallModal();
+        this.initializePeerConnection();
+        this.showEndCallButton();
+        this.showNotification('Звонок принят');
     }
 
     rejectCall() {

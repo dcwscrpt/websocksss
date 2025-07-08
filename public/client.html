@@ -72,6 +72,32 @@
             color: #4ecdc4;
         }
 
+        .media-btn {
+            background: linear-gradient(45deg, #4ecdc4, #45b7aa);
+            color: white;
+            border: none;
+            border-radius: 20px;
+            padding: 8px 16px;
+            font-size: 12px;
+            cursor: pointer;
+            margin-top: 10px;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .media-btn:hover {
+            background: linear-gradient(45deg, #45b7aa, #3da89a);
+            transform: translateY(-2px);
+        }
+
+        .media-btn:disabled {
+            background: #666;
+            cursor: not-allowed;
+            transform: none;
+        }
+
         .users-list {
             flex: 1;
             overflow-y: auto;
@@ -524,6 +550,9 @@
                 </div>
                 <div class="username" id="username">Загрузка...</div>
                 <div class="status" id="connectionStatus">Подключение...</div>
+                <button id="requestMediaBtn" class="media-btn" title="Разрешить доступ к камере">
+                    <i class="fas fa-video"></i> Разрешить камеру
+                </button>
             </div>
             
             <div class="users-list" id="usersList">
