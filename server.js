@@ -507,31 +507,46 @@ function generateId() {
   return Math.random().toString(36).substr(2, 9);
 }
 
-// Обработка завершения процесса
-process.on('SIGINT', () => {
-  log('Получен сигнал SIGINT, завершение работы...');
+// Graceful shutdown с таймаутом
+function gracefulShutdown(signal) {
+  log(`Получен сигнал ${signal}, завершение работы...`);
+  
+  // Закрываем WebSocket соединения
+  wss.clients.forEach(client => {
+    try {
+      client.close();
+    } catch (error) {
+      // Игнорируем ошибки при закрытии
+    }
+  });
+  
+  // Закрываем HTTP сервер с таймаутом
   server.close(() => {
     log('HTTP сервер закрыт');
     process.exit(0);
   });
-});
+  
+  // Принудительное завершение через 3 секунды
+  setTimeout(() => {
+    log('Принудительное завершение работы');
+    process.exit(0);
+  }, 3000);
+}
 
-process.on('SIGTERM', () => {
-  log('Получен сигнал SIGTERM, завершение работы...');
-  server.close(() => {
-    log('HTTP сервер закрыт');
-    process.exit(0);
-  });
-});
+// Обработка завершения процесса
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 // Обработка необработанных ошибок
 process.on('uncaughtException', (error) => {
   log(`Необработанная ошибка: ${error.message}`, 'error');
   log(error.stack, 'error');
+  process.exit(1);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
   log(`Необработанное отклонение промиса: ${reason}`, 'error');
+  process.exit(1);
 });
 
 // Запуск сервера

@@ -339,17 +339,59 @@ class WebSocketChat {
 
     // ===== ФУНКЦИИ ЗВОНКОВ =====
 
+    // Проверка поддержки getUserMedia
+    checkMediaSupport() {
+        // Проверяем HTTPS для локальной разработки
+        if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+            console.warn('getUserMedia требует HTTPS в продакшене');
+        }
+
+        if (!navigator.mediaDevices) {
+            // Fallback для старых браузеров
+            navigator.mediaDevices = {};
+        }
+
+        if (!navigator.mediaDevices.getUserMedia) {
+            navigator.mediaDevices.getUserMedia = function(constraints) {
+                const getUserMedia = navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia;
+
+                if (!getUserMedia) {
+                    return Promise.reject(new Error('getUserMedia не поддерживается в этом браузере'));
+                }
+
+                return new Promise(function(resolve, reject) {
+                    getUserMedia.call(navigator, constraints, resolve, reject);
+                });
+            }
+        }
+
+        return navigator.mediaDevices.getUserMedia;
+    }
+
     async startCall(targetUserId) {
         if (this.isInCall) {
             this.showNotification('Вы уже в звонке');
             return;
         }
 
+        // Проверяем поддержку медиа
+        const getUserMedia = this.checkMediaSupport();
+        if (!getUserMedia) {
+            this.showNotification('Ваш браузер не поддерживает видеозвонки');
+            return;
+        }
+
         try {
             // Получаем доступ к медиа устройствам
-            this.localStream = await navigator.mediaDevices.getUserMedia({
-                video: true,
-                audio: true
+            this.localStream = await getUserMedia({
+                video: {
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                },
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true
+                }
             });
 
             this.callState = 'calling';
@@ -367,7 +409,21 @@ class WebSocketChat {
 
         } catch (error) {
             console.error('Ошибка получения медиа:', error);
-            this.showNotification('Ошибка доступа к камере/микрофону');
+            
+            let errorMessage = 'Ошибка доступа к камере/микрофону';
+            
+            if (error.name === 'NotAllowedError') {
+                errorMessage = 'Доступ к камере/микрофону запрещен. Разрешите доступ в настройках браузера.';
+            } else if (error.name === 'NotFoundError') {
+                errorMessage = 'Камера или микрофон не найдены. Проверьте подключение устройств.';
+            } else if (error.name === 'NotSupportedError') {
+                errorMessage = 'Ваш браузер не поддерживает видеозвонки. Попробуйте Chrome или Firefox.';
+            } else if (error.name === 'NotReadableError') {
+                errorMessage = 'Камера или микрофон уже используются другим приложением.';
+            }
+            
+            this.showNotification(errorMessage);
+            this.hideCallModal();
         }
     }
 
@@ -389,11 +445,25 @@ class WebSocketChat {
     async acceptCall() {
         if (this.callState !== 'ringing') return;
 
+        // Проверяем поддержку медиа
+        const getUserMedia = this.checkMediaSupport();
+        if (!getUserMedia) {
+            this.showNotification('Ваш браузер не поддерживает видеозвонки');
+            this.rejectCall();
+            return;
+        }
+
         try {
             // Получаем доступ к медиа устройствам
-            this.localStream = await navigator.mediaDevices.getUserMedia({
-                video: true,
-                audio: true
+            this.localStream = await getUserMedia({
+                video: {
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                },
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true
+                }
             });
 
             this.callState = 'connected';
@@ -413,7 +483,20 @@ class WebSocketChat {
 
         } catch (error) {
             console.error('Ошибка получения медиа:', error);
-            this.showNotification('Ошибка доступа к камере/микрофону');
+            
+            let errorMessage = 'Ошибка доступа к камере/микрофону';
+            
+            if (error.name === 'NotAllowedError') {
+                errorMessage = 'Доступ к камере/микрофону запрещен. Разрешите доступ в настройках браузера.';
+            } else if (error.name === 'NotFoundError') {
+                errorMessage = 'Камера или микрофон не найдены. Проверьте подключение устройств.';
+            } else if (error.name === 'NotSupportedError') {
+                errorMessage = 'Ваш браузер не поддерживает видеозвонки. Попробуйте Chrome или Firefox.';
+            } else if (error.name === 'NotReadableError') {
+                errorMessage = 'Камера или микрофон уже используются другим приложением.';
+            }
+            
+            this.showNotification(errorMessage);
             this.rejectCall();
         }
     }

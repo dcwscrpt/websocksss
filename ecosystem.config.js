@@ -6,6 +6,10 @@ module.exports = {
     autorestart: true,
     watch: false,
     max_memory_restart: '1G',
+    kill_timeout: 3000,
+    listen_timeout: 3000,
+    max_restarts: 10,
+    min_uptime: '10s',
     env: {
       NODE_ENV: 'development',
       PORT: 3000
